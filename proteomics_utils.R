@@ -1637,13 +1637,13 @@ PTM_localization_V2 <- function(df_ptm = read_Perseus_file(),
   # please manually load and supply files like this:
   
   # library(phylotools)
-  # fasta = read.fasta("C:\\Users\\di67hav\\Desktop\\Fasta\\updated_FASTA_May_2023\\UP000000589_10090_mouse.fasta", clean_name = F)
-  # fasta_add = read.fasta("C:\\Users\\di67hav\\Desktop\\Fasta\\updated_FASTA_May_2023\\UP000000589_10090_additional_mouse.fasta", clean_name = F)
+  # fasta = read.fasta("path.fasta", clean_name = F)
+  # fasta_add = read.fasta("path.fasta", clean_name = F)
   # 
-  # df_ptm <- read_Perseus_file("D:\\FabianMS\\homeostat\\Japan\\FKJ phospho\\fresh quant\\report_full.pr_matrix.tsv")
+  # df_ptm <- read_Perseus_file("path.pr_matrix.tsv")
   # df_ptm_annot <- PTM_localization_V2(df_ptm, fasta, fasta_add)
   # 
-  # write.table(df_ptm_annot, file = "D:\\FabianMS\\homeostat\\Japan\\FKJ phospho\\fresh quant\\report_full.pr_matrix_annot2.tsv", row.names = F, col.names = T, sep = "\t", quote = FALSE, na = "")
+  # write.table(df_ptm_annot, file = "path.tsv", row.names = F, col.names = T, sep = "\t", quote = FALSE, na = "")
   
   
   
