@@ -918,6 +918,170 @@ Perseus_matching <- function(df1,df2,
   return(aggregated_result)
 }
 
+
+perform_fisher_enrichment <- function(df, foreground_col, annotation_cols, cutoff = 0.05, relative_enrichment_column = NULL) {
+  # this function calculates P values at around 2x what Perseus calculates, the FDR is very similar
+  # the relative enrichment worked correctly when using the Protein column but not the Proteins column (with that I felt like both this function as well as Perseus dont report the correct subsets)
+  
+  require(tidyverse)
+  
+  # Get unique foreground groups
+  unique_foregrounds <- unique(df[[foreground_col]])
+  unique_foregrounds <- unique_foregrounds[unique_foregrounds != ""]
+  
+  # Initialize results storage
+  all_results <- list()
+  
+  # Loop through each foreground group
+  for (foreground in unique_foregrounds) {
+    # Subset data for current foreground
+    df_loop <- df %>%
+      mutate(is_current_foreground = ifelse(!!sym(foreground_col) == foreground, TRUE, FALSE))
+    
+    # Apply relative enrichment if the column is specified
+    if (!is.null(relative_enrichment_column)) {
+      df_loop <- df_loop %>%
+        group_by(!!sym(relative_enrichment_column)) %>%
+        summarize(
+          is_current_foreground = any(is_current_foreground),  # Collapse entries: TRUE if any in foreground
+          across(everything(), ~ first(.x[!is.na(.x)])),       # Take the first non-NA value for other columns
+          .groups = "drop"
+        )
+    }
+    
+    # Process each annotation column
+    for (anno_col in annotation_cols) {
+      # Explode annotations into long format
+      annotations <- df_loop %>%
+        select(is_current_foreground, !!sym(anno_col)) %>%
+        mutate(row_id = row_number()) %>%
+        separate_rows(!!sym(anno_col), sep = ";") %>%
+        filter(!is.na(!!sym(anno_col))) %>%   # Remove empty annotations
+        unique()
+      
+      # Count occurrences in foreground and background
+      annotation_counts <- annotations %>%
+        group_by(!!sym(anno_col)) %>%
+        summarize(
+          in_foreground = sum(is_current_foreground),
+          in_background = sum(!is_current_foreground),
+          .groups = "drop"
+        )
+      
+      # Total foreground and background counts
+      total_foreground <- sum(df_loop$is_current_foreground)
+      total_background <- sum(!df_loop$is_current_foreground)
+      
+      # Perform Fisher's exact test and calculate enrichment
+      test_results <- annotation_counts %>%
+        rowwise() %>%
+        mutate(
+          P.value = fisher.test(
+            matrix(c(in_foreground, in_background, 
+                     total_foreground - in_foreground, 
+                     total_background - in_background), 
+                   nrow = 2)
+          )$p.value
+        ) %>%
+        ungroup() %>%
+        mutate(
+          Selection.value = foreground,
+          Category.column = anno_col,
+          total_foreground = total_foreground,
+          total_background = total_background,
+          Total.size = total_foreground + total_background,
+          Selection.size = total_foreground,
+          Category.size = in_foreground + in_background,
+          Intersection.size = in_foreground,
+          Enrichment.factor = (Intersection.size / Selection.size) / (Category.size / Total.size),
+          Selection.column = foreground_col,
+          Category.value = !!sym(anno_col),
+        )
+      
+      # Adjust p-values for multiple testing
+      test_results <- test_results %>%
+        mutate(
+          Benj..Hoch..FDR = p.adjust(P.value, method = "BH") # Apply BH or other methods
+        ) %>%
+        filter(P.value <= cutoff & Benj..Hoch..FDR <= cutoff)
+      
+      # Store results
+      all_results[[paste(foreground, anno_col, sep = "_")]] <- test_results
+    }
+  }
+  
+  # Combine all results
+  final_results <- bind_rows(all_results)
+  
+  # Select and order relevant columns
+  final_results <- final_results %>%
+    select(
+      Selection.column,
+      Selection.value,
+      Category.column,
+      Category.value,
+      Total.size,
+      Selection.size,
+      Category.size,
+      Intersection.size,
+      Enrichment.factor,
+      P.value,
+      Benj..Hoch..FDR
+    ) %>%
+    filter(Category.value != "") %>% 
+    arrange(Enrichment.factor)
+  
+  return(final_results)
+}
+
+filter_vv_archived <- function(df, conditions, type = "any", min_valid = 1) {
+  # example use:
+  
+  # BL0_Froz <- metadata_Froz_homeostat %>% filter(type == "Nuc" & condition == "BL0") %>% pull(Name)
+  # BL12_Froz <- metadata_Froz_homeostat %>% filter(type == "Nuc" & condition == "BL12") %>% pull(Name)
+  # filter_vv(results_Froz_homeostat_annot, conditions = list(BL0_Froz, BL12_Froz))
+  
+  df_filtered <- df %>%
+    rowwise() %>%
+    filter(
+      if (type == "any") {
+        any(sapply(conditions, function(group) sum(!is.na(c_across(all_of(group)))) >= min_valid))
+      } else if (type == "each") {
+        all(sapply(conditions, function(group) sum(!is.na(c_across(all_of(group)))) >= min_valid))
+      } else {
+        stop("Invalid type. Use 'each' or 'any'.")
+      }
+    ) %>%
+    ungroup()
+  cat("Number of rows after filtering: ", as.character(nrow(df_filtered)), "\n")
+  
+  return(df_filtered)
+}
+
+filter_vv <- function(df, conditions, type = "any", min_valid = 1) {
+  # Compute the number of valid (non-NA) values per row for each condition group
+  condition_counts <- lapply(conditions, function(group) rowSums(!is.na(df[, group, drop = FALSE])))
+  
+  # Convert list to a matrix for efficient row-wise operations
+  condition_counts_matrix <- do.call(cbind, condition_counts)
+  
+  # Apply filtering condition based on 'type'
+  if (type == "any") {
+    row_filter <- rowSums(condition_counts_matrix >= min_valid) > 0  # At least one group meets the threshold
+  } else if (type == "each") {
+    row_filter <- rowSums(condition_counts_matrix >= min_valid) == length(conditions)  # All groups meet the threshold
+  } else {
+    stop("Invalid type. Use 'each' or 'any'.")
+  }
+  
+  # Filter the dataframe based on computed row_filter
+  df_filtered <- df[row_filter, , drop = FALSE]
+  
+  cat("Number of rows after filtering: ", nrow(df_filtered), "\n")
+  
+  return(df_filtered)
+}
+
 # =============================================================================
 # Imputation
 # =============================================================================
