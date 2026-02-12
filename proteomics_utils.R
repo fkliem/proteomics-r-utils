@@ -287,8 +287,8 @@ enrichAnalPlot <- function(df = read_Perseus_file(),
                  color=P.value,
                  size=Intersection.size)) +
     geom_point()+
-    scale_size(limits = c(1, max(df$Intersection.size)),
-                    breaks = round(seq(1, max(df$Intersection.size), length.out = 5)),
+    scale_size(limits = c(min(df$Intersection.size), max(df$Intersection.size)),
+                    breaks = round(seq(min(df$Intersection.size), max(df$Intersection.size), length.out = 5)),
                     range = size_range)+
     scale_x_reordered()+
     scale_color_gradient(low="blue", high="red")+
