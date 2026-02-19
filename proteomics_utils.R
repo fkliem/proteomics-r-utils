@@ -2115,9 +2115,34 @@ calculate_coverage <- function(protein_sequence, short_sequences) {
 }
 
 
-plot_PCA <- function(projections = read_Perseus_file(changeWD = F), ColourVariable, ShapeVariable = NA, PercentageC1, PercentageC2, plotHulls = T){
-  
+plot_PCA <- function(input = read_Perseus_file(changeWD = F), ColourVariable, ShapeVariable = NA, 
+                     PercentageC1, PercentageC2, plotHulls = T, calculate = F, itemcount = NULL){
+  # input can be a list of rawdata and metadata to calculate the PCA in here (then you have to set calculate = T), or you can load the projections from a Perseus PCA
   require(ggalt)
+  
+  if(calculate){
+    df <- input[[1]] %>% 
+      select(contains("Intensity."), contains(".raw")) %>% 
+      filter(if_all(everything(), ~ is.finite(.)))
+    itemcount <- nrow(df)
+    metadata <- input[[2]]
+    
+    pca_res <- prcomp(df %>% as.matrix() %>% t(), scale. = TRUE)
+    projections <- as.data.frame(pca_res$x) %>% 
+      rownames_to_column("Name") %>% 
+      rename(Component.1 = PC1,
+             Component.2 = PC2) %>% 
+      left_join(metadata, by="Name")
+    
+    # Calculate percentage of variance explained
+    pca_var <- pca_res$sdev^2  # Eigenvalues (variance of each PC)
+    pca_var_percent <- (pca_var / sum(pca_var)) * 100  # Proportion of variance explained
+    PercentageC1 <- round(pca_var_percent[1], 2)
+    PercentageC2 <- round(pca_var_percent[2], 2)
+    
+  }else{
+    projections <- input
+  }
   
   # both ColourVariable and ShapeVariable have to be strings
   
@@ -2140,10 +2165,14 @@ plot_PCA <- function(projections = read_Perseus_file(changeWD = F), ColourVariab
     labs(x= paste0("Component 1 [",PercentageC1,"%]"),
          y=paste0("Component 2 [",PercentageC2,"%]"))
     
-  
+  # Add annotation if itemcount exists
+  if (!is.null(itemcount)) {
+    p_projections <- p_projections +
+      annotate("text",
+               x = Inf, y = -Inf,  # Place in the bottom-right corner
+               label = paste0("n = ", itemcount),
+               hjust = 1.2, vjust = -0.5)
+  }
   
   return(p_projections)
 }
-
-
-
