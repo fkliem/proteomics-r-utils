@@ -813,13 +813,36 @@ pearson_dist <- function(data, profile.id, plot.cutoff) {
 }
 
 
-category_counting <- function (df, column_name, distinction_col = NA){
-  if (!is.na(distinction_col)){df <- df %>% distinct(!!as.name(distinction_col), .keep_all = TRUE)}
-  count <- data.frame(name = str_split(paste(df[,column_name], collapse = ";"), # first collapse a column from the df
-                                       ";", simplify = T) %>% t) %>% # then split it along ";" and make a df out of it
-    add_count(name) %>%
-    distinct %>%
-    arrange(desc(n))
+category_counting <- function(df, categorical_columns, distinction_col = NA, grouping_cols = NULL) {
+  # Ensure distinct rows if a distinction column is provided
+  if (!is.na(distinction_col)) {
+    df <- df %>% distinct(!!as.name(distinction_col), .keep_all = TRUE)
+  }
+  
+  # Select categorical and grouping columns
+  selected_cols <- c(categorical_columns, grouping_cols)
+  
+  count <- df %>% 
+    select(all_of(selected_cols)) %>%  # Select specified categorical and grouping columns
+    pivot_longer(cols = all_of(categorical_columns), names_to = "category", values_to = "term") %>%  # Convert wide to long format
+    separate_rows(term, sep = ";") %>%  # Split multiple terms in a single cell
+    filter(term != "" & !is.na(term))  # Remove empty or NA terms
+  
+  # Grouping logic
+  if (!is.null(grouping_cols)) {
+    count <- count %>%
+      group_by(across(all_of(grouping_cols)), category, term) %>%
+      count() %>%
+      arrange(desc(n)) %>%
+      ungroup()
+  } else {
+    count <- count %>%
+      group_by(category, term) %>%
+      count() %>%
+      arrange(desc(n)) %>%
+      ungroup()
+  }
+  
   return(count)
 }
 
