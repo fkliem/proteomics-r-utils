@@ -1343,26 +1343,33 @@ plot_t_test_results <- function(results, condition_1, condition_2,
   return(p)
 }
 
-plot_heatmap <- function(dataframe, samples, row_annotation_cols = NA, show_colnames = F) {
+plot_heatmap <- function(dataframe, samples, row_annotation_cols = NA, show_colnames = FALSE, show_rownames = TRUE, 
+                         row_column = "Genes", impute = TRUE) {
   # Capture the original variable names of the lists
   sample_names <- sapply(substitute(samples)[-1], deparse)
   
   # Flatten the list of lists into a single vector of column names
   selected_columns <- unlist(samples)
   
-  # Filter the dataframe to keep only the selected columns and the Genes column
+  # Filter the dataframe to keep only the selected columns and the row_column
   filtered_data <- dataframe %>%
-    select(all_of(selected_columns), Genes)
+    select(all_of(selected_columns), all_of(row_column))
   
-  # Set 'Genes' column as row names
+  # Set row_column as row names
   filtered_data <- filtered_data %>% 
-    column_to_rownames(var = "Genes")
+    column_to_rownames(var = row_column)
   
-  # Replace NA with the floor of the lowest value in the matrix -1
-  if (any(is.na(filtered_data))) {
+  # Initialize impute_mask (in case impute is FALSE)
+  impute_mask <- matrix(FALSE, nrow = nrow(filtered_data), ncol = ncol(filtered_data))
+  
+  # Replace NA values if imputation is enabled
+  if (impute && any(is.na(filtered_data))) {
     impute_value <- floor(min(filtered_data, na.rm = TRUE)) - 1  # Find the lowest value, floor it, and subtract 1
     filtered_data[is.na(filtered_data)] <- impute_value  # Replace NA
     cat("NA values detected; replacing with ", as.character(impute_value), "\n")
+    
+    # Create a mask for imputed values
+    impute_mask <- filtered_data == impute_value
   }
   
   # Convert to a matrix (required for pheatmap)
@@ -1373,18 +1380,28 @@ plot_heatmap <- function(dataframe, samples, row_annotation_cols = NA, show_coln
     stop("No rows with sufficient variability to cluster. Check your input data.")
   }
   
-  # Create a mask for imputed values
-  impute_mask <- intensity_matrix == impute_value
-  # Perform row scaling (ignoring the mask during scaling)
-  scaled_matrix <- t(apply(intensity_matrix, 1, scale, center = TRUE, scale = TRUE))
-  # Replace imputed values to 0 for proper clustering
-  scaled_matrix[impute_mask] <- 0 # Temporarily set them to 0 or some neutral value for clustering
+  # Perform row scaling (ignoring NA values during scaling)
+  scaled_matrix <- t(apply(intensity_matrix, 1, function(x) scale(x, center = TRUE, scale = TRUE)))
+  
+  # If imputation was enabled, replace imputed values with 0 temporarily for clustering
+  if (impute) {
+    scaled_matrix[impute_mask] <- 0  # Neutral value for clustering
+  }
+  
   # Perform clustering manually (Calculate Euclidean distance)
-  distance_matrix <- dist(scaled_matrix, method = "euclidean") # Calculate Euclidean distance
-  # Perform hierarchical clustering
-  clustering <- hclust(distance_matrix, method = "complete") # Perform hierarchical clustering
-  # Replace imputed values back to NA after clustering
-  scaled_matrix[impute_mask] <- NA
+  clustering <- tryCatch({
+    distance_matrix <- dist(scaled_matrix, method = "euclidean")
+    hclust(distance_matrix, method = "complete")
+  }, error = function (e) {
+    message("An error occured: ", e$message, "\n\nNo clustering will be performed. You may want to set impute = TRUE")
+    FALSE
+  })
+  
+  
+  # Restore imputed values back to NA after clustering (if imputation was enabled)
+  if (impute) {
+    scaled_matrix[impute_mask] <- NA
+  }
   
   # Create a column annotation dataframe
   annotation_col <- data.frame(Group = rep(sample_names, lengths(samples)))
@@ -1393,17 +1410,16 @@ plot_heatmap <- function(dataframe, samples, row_annotation_cols = NA, show_coln
   # Define colors for annotation_col
   unique_samples <- unique(annotation_col$Group)
   annotation_colors <- list(Group = setNames(
-    rainbow(length(unique_samples)), # Generate colors for each group
+    rainbow(length(unique_samples)),  # Generate colors for each group
     unique_samples
   ))
   
   # Generate row annotations
   annotation_row <- NA
   if (any(!is.na(row_annotation_cols))) {
-    # Filter for annotation columns and create row annotation
     row_annotation_data <- dataframe %>%
-      select(all_of(row_annotation_cols), Genes) %>%
-      column_to_rownames(var = "Genes")
+      select(all_of(row_annotation_cols), all_of(row_column)) %>%
+      column_to_rownames(var = row_column)
     
     # Convert "+" entries to TRUE/FALSE
     annotation_row <- as.data.frame(apply(row_annotation_data, 2, function(x) x == "+"))
@@ -1415,24 +1431,24 @@ plot_heatmap <- function(dataframe, samples, row_annotation_cols = NA, show_coln
     )
     names(row_annotation_colors) <- colnames(annotation_row)
     annotation_colors <- c(annotation_colors, row_annotation_colors)
-  } else {
-    annotation_row <- NA # Explicitly set to NA
   }
   
   # Generate the heatmap
-  pheatmap(scaled_matrix,
-           scale = "none", # No additional row scaling for visualization
-           cluster_rows = clustering, # Use custom clustering
-           cluster_cols = F,
-           clustering_method = "complete",
-           color = colorRampPalette(c("navy", "white", "firebrick"))(50), # Color gradient
-           annotation_col = annotation_col,
-           annotation_colors = annotation_colors, # Combine both column and row annotation colors
-           annotation_row = annotation_row, # Add row annotations (NA if not provided)
-           na_col = "grey",
-           show_colnames = show_colnames) # Toggle column names display
+  p <- pheatmap(scaled_matrix,
+                scale = "none", 
+                cluster_rows = clustering, 
+                cluster_cols = FALSE,
+                clustering_method = "complete",
+                color = colorRampPalette(c("navy", "white", "firebrick"))(50),
+                annotation_col = annotation_col,
+                annotation_colors = annotation_colors, 
+                annotation_row = annotation_row, 
+                na_col = "grey",
+                show_colnames = show_colnames,
+                show_rownames = show_rownames)
+  
+  return(p)
 }
-
 
 # =============================================================================
 # Quantification helpers
