@@ -1492,6 +1492,9 @@ quant_phos_STY <- function(phos_STY = read_Perseus_file(), software = "MaxQuant"
     df <- phos_STY %>% 
       filter(grepl("UniMod:21", Modified.Sequence)) %>%
       select(contains(".raw"))}
+  if(software == "expanded"){
+    df <- phos_STY %>%
+      select(contains("Intensity."))}
   
   df[df != 0] <- 1
   df <- df %>%
