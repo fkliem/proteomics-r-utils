@@ -1223,79 +1223,80 @@ row_average_imputation <- function(data_matrix, groups_matrix, group){
 #' @param min_valid Minimum number of non-missing values per group
 #' @param apply_imputation Logical, apply Perseus-style imputation before testing
 #' @return Original table with additional result columns
-t_test <- function(report, condition_1, condition_2, min_valid = 3, apply_imputation = FALSE){
-  # internal function for individual t-test
-  t_test_protein <- function(row, condition_1, condition_2) {
-    group1 <- as.numeric(row[condition_1])
-    group2 <- as.numeric(row[condition_2])
-    
-    # Check if both groups have at least 2 non-NA values for the t-test
+t_test <- function(report, condition_1, condition_2, min_valid = 3, apply_imputation = FALSE) {
+  start_total <- Sys.time()
+  # currently produces named numerical columns, which is why the results are not identical to the original function
+  # Internal function to run t-test on numeric vectors
+  t_test_protein <- function(group1, group2) {
     if (sum(!is.na(group1)) >= 2 & sum(!is.na(group2)) >= 2) {
-      
-      # Check if the groups have identical values
-      if (all(group1 == group1[1], na.rm = TRUE) & all(group2 == group2[1], na.rm = TRUE)) {
-        # If both groups are constant (or identical), return NA
-        return(c(NA, NA, NA))
+      if (length(union(group1, group2)) == 1) {
+        return(list(mean1 = NA, mean2 = NA, pval = NA))
       }
-      
-      # Perform the t-test if the values are not constant
       test <- t.test(group1, group2, var.equal = TRUE)
-      return(c(test$estimate[1], test$estimate[2], test$p.value))
-    } else {
-      # Return NaN for mean values and p-value if not enough observations
-      return(c(NA, NA, NA))
-    }
+      return(list(mean1 = test$estimate[1], mean2 = test$estimate[2], pval = test$p.value))
+    } 
+    return(list(mean1 = NA, mean2 = NA, pval = NA))
   }
   
-  # Apply the t-test across all proteins
-  # Adding columns for the mean of each group and p-value
-  
-  # Capture the names of condition_1 and condition_2 as strings
-  condition_1_name <- deparse(substitute(condition_1))
-  condition_2_name <- deparse(substitute(condition_2))
-  
-  # Filter for rows where at least one of the groups has `min_valid` non-NA values
-  filtered_report <- report %>%
-    select(-matches("T_test_Difference_"), -matches("T_test_Pval_"), -matches("neg_log10_T_test_Pval_"), -matches("Adj_Pval_")) %>% 
-    rowwise() %>%
-    filter(
-      sum(!is.na(c_across(all_of(condition_1)))) >= min_valid |
-        sum(!is.na(c_across(all_of(condition_2)))) >= min_valid
+  # Measure time taken for filtering valid rows
+  start_filter <- Sys.time()
+  valid_rows <- report %>%
+    mutate(
+      valid_condition_1 = rowSums(!is.na(select(., all_of(condition_1)))) >= min_valid,
+      valid_condition_2 = rowSums(!is.na(select(., all_of(condition_2)))) >= min_valid
     ) %>%
-    ungroup()
-  cat("Number of rows after filtering: ", as.character(nrow(filtered_report)), "\n")
+    filter(valid_condition_1 | valid_condition_2) %>%
+    select(-valid_condition_1, -valid_condition_2)
+  cat("Number of rows after filtering: ", nrow(valid_rows), "\n")
+  cat("Time taken for filtering: ", round(difftime(Sys.time(), start_filter, units = "secs"), 3), " seconds\n")
   
   # Apply imputation if specified
   if (apply_imputation) {
-    filtered_report <- impute_perseus_normal(filtered_report)
+    valid_rows <- impute_perseus_normal(valid_rows)
   }
   
-  # Compute the t-test for rows that pass the filter
-  results <- filtered_report %>%
-    rowwise() %>%
+  # Measure time taken for performing t-tests
+  start_ttest <- Sys.time()
+  test_results <- valid_rows %>%
+    rowwise() %>% 
+    mutate(t_results = list(t_test_protein(
+      c_across(all_of(condition_1)), 
+      c_across(all_of(condition_2))
+    ))) %>%
+    unnest_wider(t_results) %>%  
     mutate(
-      T_test_Difference = mean(c_across(all_of(condition_1)), na.rm = TRUE) - mean(c_across(all_of(condition_2)), na.rm = TRUE),
-      T_test_Pval = t_test_protein(cur_data(),condition_1,condition_2)[3],
-      neg_log10_T_test_Pval = -log(T_test_Pval, 10)
+      T_test_Difference = mean1 - mean2,
+      neg_log10_T_test_Pval = -log10(pval),
+      T_test_filtered = "+",
     ) %>%
-    ungroup()
+    ungroup() %>%
+    select(ID, T_test_Difference, pval, neg_log10_T_test_Pval, T_test_filtered) 
+  cat("Time taken for performing t-tests: ", round(difftime(Sys.time(), start_ttest, units = "secs"), 3), " seconds\n")
   
+  # Adjust p-values using Benjamini-Hochberg method
+  test_results <- test_results %>%
+    mutate(Adj_Pval = p.adjust(pval, method = "BH")) %>%
+    rename(T_test_Pval = pval)
   
-  # 5. Adjust p-values for multiple testing using Benjamini-Hochberg method (FDR)
-  results <- results %>%
-    mutate(Adj_Pval = p.adjust(T_test_Pval, method = "BH")) %>%
-    # Rename columns using dynamic names
-    rename(
-      !!paste0("T_test_Difference_", condition_1_name, "_vs_", condition_2_name) := T_test_Difference,
-      !!paste0("T_test_Pval_", condition_1_name, "_vs_", condition_2_name) := T_test_Pval,
-      !!paste0("neg_log10_T_test_Pval_", condition_1_name, "_vs_", condition_2_name) := neg_log10_T_test_Pval,
-      !!paste0("Adj_Pval_", condition_1_name, "_vs_", condition_2_name) := Adj_Pval
-    )
+  # Dynamically rename columns
+  condition_1_name <- deparse(substitute(condition_1))
+  condition_2_name <- deparse(substitute(condition_2))
+  col_suffix <- paste0("_", condition_1_name, "_vs_", condition_2_name)
   
-  # Merge the original report_pr with results to retain all rows, filling NAs for rows that didn't pass the filter
-  final_results <- left_join(report, results %>%
-                               select(ID, matches("T_test_Difference_"), matches("T_test_Pval_"), matches("neg_log10_T_test_Pval_"), matches("Adj_Pval_")), 
-                             by = "ID")
+  test_results <- test_results %>%
+    rename_with(~ paste0(., col_suffix),
+                c("T_test_Difference", "T_test_Pval", "neg_log10_T_test_Pval", "Adj_Pval", "T_test_filtered"))
+  
+  # Merge with original dataset while avoiding duplicate columns
+  final_results <- report %>%
+    left_join(test_results, by = "ID") %>%
+    select(!matches("\\.x$|\\.y$")) 
+  
+  # Ensure T_test_filtered is the last column
+  final_results <- final_results %>%
+    select(-matches("T_test_filtered_"), everything(), matches("T_test_filtered_"))
+  
+  cat("Time taken for t-test function: ", round(difftime(Sys.time(), start_total, units = "secs"), 3), " seconds\n")
   
   return(final_results)
 }
