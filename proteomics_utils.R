@@ -60,7 +60,6 @@ QC_proteome <- function(dir = choose.dir()){
   return(dir)
 }
 
-
 # =============================================================================
 # Quality control and exploratory plots
 # =============================================================================
@@ -131,15 +130,21 @@ plot_quants <- function(quants,
 #'   \code{id} or \code{UID}, respectively).
 #'
 #' @return A \code{ggplot} object.
-cyclic_plotting <- function(df, IdOfInterest=NULL, annotation, scaleTo24h = F, zScore = T, fit = "", facet = "", datatype){
+cyclinc_plotting <- function(df, IdOfInterest=NULL, annotation, scaleTo24h = F, zScore = T, fit = "", facet = "", datatype = "prot", facet_rows = 1){
   require(tidyverse)
   require(svDialogs)
   require(janitor)
-
+  
+  # check input
+  if(!("Name" %in% colnames(annotation))){
+    cat("Your annotation dataframe is missing a column 'Name'.\n")
+  }
+  if(!("time" %in% colnames(annotation))){
+    cat("Your annotation dataframe is missing a column 'time'.\n")
+  }
+  
   sc_cols <- make.names(annotation$Name)
-
-
-
+  
   if(typeof(IdOfInterest)=="character"){
     IDs <- unlist(str_split(IdOfInterest, "\n")) # make an iterable value of GOIs
     # isolate ID rows from original table:
@@ -151,7 +156,7 @@ cyclic_plotting <- function(df, IdOfInterest=NULL, annotation, scaleTo24h = F, z
       POI <-df %>%
         filter(id %in% IDs)
     }
-
+    
     # pivot the table from wide to long so that ggplot can work with it
     if(datatype=="prot"){
       POI_long <- POI %>%
@@ -159,26 +164,26 @@ cyclic_plotting <- function(df, IdOfInterest=NULL, annotation, scaleTo24h = F, z
         pivot_longer(!c('Gene.names',"id"), names_to = "Sample.Nr", values_to = "value")
     }else if(datatype == "phospho"){
       POI_long <- POI %>%
-        select('Gene.names', "Unique.identifier", starts_with("Intensity.")) %>%
+        select('Gene.names', "Unique.identifier", all_of(sc_cols)) %>%
         pivot_longer(!c('Gene.names',"Unique.identifier"), names_to = "Sample.Nr", values_to = "value")
     }
   }else if (typeof(IdOfInterest) %in% c("numerical","double")){
     print("Please format your IdOfInterest as a character.")
-    }else if (datatype == "phospho"){
+  }else if (datatype == "phospho"){
     POI_long <- df %>%
-      select('Gene.names', "Unique.identifier", starts_with("Intensity.")) %>%
+      select('Gene.names', "Unique.identifier", all_of(sc_cols)) %>%
       pivot_longer(!c('Gene.names',"Unique.identifier"), names_to = "Sample.Nr", values_to = "value")
   }else if (datatype == "prot"){
     cat("If you get the error #`cols` must select at least one column# it was assumed that we are dealing with proteomes but there is no columns starting with LFQ.intensity.")
     POI_long <- df %>%
-      select('Gene.names', "id", starts_with("LFQ.intensity.")) %>%
+      select('Gene.names', "id", all_of(sc_cols)) %>%
       pivot_longer(!c('Gene.names',"id"), names_to = "Sample.Nr", values_to = "value")
   }
-
+  
   # make syntactically valid names in case there were e.g. spaces
   annotation$Name <- make.names(annotation$Name)
-
-
+  
+  
   # add the time & group measure from the annotation file to POI_long
   if(!all(c("time","Name") %in% colnames(annotation))){
     print("Make sure that your df contains the column names 'Name' and 'time'.")
@@ -187,7 +192,7 @@ cyclic_plotting <- function(df, IdOfInterest=NULL, annotation, scaleTo24h = F, z
   if("group" %in% colnames(annotation)){
     POI_long$group <- annotation$group[match(POI_long$Sample.Nr,annotation$Name)]
   }
-
+  
   # subtract 24 from times >24 until none remain >24
   if(scaleTo24h){
     while(max(POI_long$time)>24){
@@ -195,11 +200,11 @@ cyclic_plotting <- function(df, IdOfInterest=NULL, annotation, scaleTo24h = F, z
                                                        TRUE ~ time))
     }
   }
-
+  
   if("Unique.identifier" %in% colnames(df)){
     POI_long$id <- POI_long$Unique.identifier
   }
-
+  
   # for group wise z-scoring combine the UID and group column (if there is one)
   if(zScore){
     if("group" %in% colnames(annotation)){
@@ -207,57 +212,73 @@ cyclic_plotting <- function(df, IdOfInterest=NULL, annotation, scaleTo24h = F, z
       POI_long$value <- ave(POI_long$value, POI_long$id_group, FUN=scale)
     }else{
       POI_long$value <- ave(POI_long$value, POI_long$id, FUN=scale)
-      }
     }
-
+  }
+  
   # plot all LFQ intensities
   if("group" %in% colnames(annotation)){
     p <- ggplot(POI_long, aes(x=time, y=value, color = group)) +
       geom_point() +
       {if(facet == "id+group")facet_grid(group~Gene.names+id)}+
       {if(facet == "id")facet_grid(.~Gene.names+id)}+
-      {if(facet != "id" & facet != "id+group")facet_grid(. ~ .data[[facet]])}+
+      {if(facet != "id" & facet != "id" & facet != "id+group")facet_grid(. ~ .data[[facet]])}+
       {if(fit == "harmonic")geom_smooth(method = "lm", formula = y ~ cos(2*pi/24*x)+sin(2*pi/24*x), se=F)}+
       {if(fit == "loess")geom_smooth(se=F, span = .6)}+
+      {if(fit == "gam")geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"), se = F)}+
       stat_summary(fun.data = mean_se,
                    geom = "errorbar"); p
   }else{
     p <- ggplot(POI_long, aes(x=time, y=value)) +
       geom_point() +
-      {if(facet == "id")facet_grid(.~Gene.names+id)}+
+      {if(facet == "id")facet_wrap(.~Gene.names+id, nrow = facet_rows)}+
+      {if(facet != "id" & facet != "" & facet != "id+group")facet_wrap(. ~ .data[[facet]], nrow = facet_rows)}+
       {if(fit == "harmonic")geom_smooth(method = "lm", formula = y ~ cos(2*pi/24*x)+sin(2*pi/24*x), se=F)}+
       {if(fit == "loess")geom_smooth(se=F, span = .6)}+
+      {if(fit == "gam")geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"), se = F)}+
       stat_summary(fun.data = mean_se,
                    geom = "errorbar"); p
   }
-
-
+  
+  
   return(p)
 }
 
-enrichAnalPlot <- function(df = read_Perseus_file(),
+enrichAnalPlot <- function(df = read_Perseus_file(), # can be defined as "clipboard" to read from clipboard
                            Categorical_Column = "",
                            p_cutoff = 1,
                            FDR_cutoff = 1,
-                           FC_min = 1,
+                           FC_min = 0,
                            FC_max = Inf,
                            intersection_cutoff = 1,
-                           text_size = 7,
-                           size_range = c(1,3),
+                           text_size = 10,
+                           size_range = c(1,5),
                            top_n = Inf,
                            facet_wrap = T,
+                           independent_y_axis = T,
+                           facet_order = NULL, # to order facets, e.g. facet_order = c("BL_phos","SD_phos","LPS_phos")
                            rm_label = F){
   # this function plots the results of a Perseus Fisher's Exact Test exported by "Generic matrix export"
   # Categorical_Column: per default it uses all Categories in the Category.column column; to change this use e.g. Categorical_Column = "Keywords"
   # p_cutoff: per default no p-value cutoff, you can set one
   # output: a list with the element "image" being the plot and "df" being the filtered dataframe used for the plot
   # example use: enrichAnalPlot()$image
-
+  
   require(tidyverse)
   require(tidytext)
   
   
-
+  
+  
+  if(typeof(df) != "list"){
+    if(df == "clipboard"){
+      cat("Trying to fetch data from clipboard...")
+      df <- read_clip_tbl() %>%
+        rename_with(~ gsub("^(C\\.\\.|N\\.\\.)", "", .))
+    }else if(all(class(df) == "character")){ # Read file if a character string is provided
+      df <- read_Perseus_file(df)
+    }
+  }
+  
   if(all(Categorical_Column != "")){
     df <- df %>% filter(Category.column %in% Categorical_Column)
   }
@@ -266,7 +287,7 @@ enrichAnalPlot <- function(df = read_Perseus_file(),
   df <- df %>%
     mutate(Category.value = if_else(Category.value == "+", Category.column, Category.value),
            Selection.value = if_else(Selection.value == "+", Selection.column, Selection.value))
-
+  
   df <- df %>% 
     filter(Benj..Hoch..FDR<=FDR_cutoff) %>% 
     filter(P.value<=p_cutoff) %>% 
@@ -279,17 +300,27 @@ enrichAnalPlot <- function(df = read_Perseus_file(),
     arrange(desc(Enrichment.factor)) %>%
     slice_head(n = top_n) %>%
     ungroup()
-
+  
+  # Apply manual facet order if provided
+  if(!is.null(facet_order)){
+    df <- df %>% 
+      mutate(Selection.value =factor(Selection.value, levels = facet_order))
+  }
+  
   # Basic barplot
   p1<-ggplot(data = df,
-             aes(x=reorder_within(Category.value, Enrichment.factor, Selection.value),
-                 y=Enrichment.factor,
-                 color=P.value,
-                 size=Intersection.size)) +
+             aes(x=if (independent_y_axis) {
+               reorder_within(Category.value, Enrichment.factor, Selection.value)
+             } else {
+               reorder(Category.value, Enrichment.factor)  # Keep Category.value unchanged
+             },
+             y=Enrichment.factor,
+             color=P.value,
+             size=Intersection.size)) +
     geom_point()+
     scale_size(limits = c(min(df$Intersection.size), max(df$Intersection.size)),
-                    breaks = round(seq(min(df$Intersection.size), max(df$Intersection.size), length.out = 5)),
-                    range = size_range)+
+               breaks = round(seq(min(df$Intersection.size), max(df$Intersection.size), length.out = 5)),
+               range = size_range)+
     scale_x_reordered()+
     scale_color_gradient(low="blue", high="red")+
     labs(x= Categorical_Column, y="Enrichment", color="p-value", size="count")+
@@ -299,42 +330,43 @@ enrichAnalPlot <- function(df = read_Perseus_file(),
     # geom_hline(aes(yintercept=1),
     #            linetype="dashed",size=1, color="red")+
     ylim(ifelse(min(df$Enrichment.factor) > 1, 1, min(df$Enrichment.factor)), max(df$Enrichment.factor)) +
-    {if(facet_wrap)facet_wrap(~Selection.value, scales = "free")}+
+    {if(facet_wrap)facet_wrap(~Selection.value, scales = ifelse(independent_y_axis, "free", "fixed"))}+
     {if(rm_label)theme(
       strip.background = element_blank(),
       strip.text.x = element_blank())}+
     coord_flip();p1
-
+  
   return(list("image" = p1, "df" = df))
 }
 
 plot_missed_cleavages <- function(evidence = read_Perseus_file(),
                                   rm.regex=T){
   require(stringr)
-  require(dplyr)
-  require(ggplot2)
-  
   regex <- detect_prefix_regex(evidence$Experiment)
-  
   if(rm.regex){
     evidence$Experiment <- str_remove(evidence$Experiment, regex)
   }
 
-  df <- evidence %>% 
-    group_by(Experiment, Missed.cleavages) %>%
-    dplyr::summarise(n = n(), .groups = "drop") %>%
-    group_by(Experiment) %>% 
-    mutate(freq = n / sum(n))
-  ggplot(df, 
-         aes(x=Experiment, 
-             y=freq, 
-             color=as.factor(Missed.cleavages), 
-             group=as.factor(Missed.cleavages)))+
-    geom_line(size=1) + 
-    theme(axis.text.x = element_text(angle = 90))+
-    labs(color = "Missed cleavage", 
-         subtitle = regex, 
-         title = "Missed cleavages")
+  evidence %>% group_by(Experiment, Missed.cleavages) %>%
+    dplyr::summarise(n = n()) %>%
+    mutate(freq = n / sum(n)) %>% ungroup() %>%
+    ggplot(aes(x=Experiment, y=freq, color=as.factor(Missed.cleavages), group=as.factor(Missed.cleavages)))+
+    geom_line(size=1) + theme(axis.text.x = element_text(angle = 90))+
+    labs(color = "Missed cleavage", subtitle = regex, title = "Missed cleavages")
+
+  if(!plot){return(df)} else{
+    require(stringr)
+    regex <- detect_prefix_regex(df$Experiment)
+    df$Experiment <- str_remove(df$Experiment, regex)
+
+    ggplot(df, aes(x=Experiment, y=median_second, group=1))+
+      geom_line() +
+      theme(axis.text.x = element_text(angle = 90)) +
+      labs(y = "median Retention time [s]",
+           title = paste0("Median Retention time (", as.character(min_Retention), "-", as.character(max_Retention), "min)"),
+           subtitle = regex) +
+    expand_limits(y = 0)
+  }
 }
 
 Med_Retention_time <- 
@@ -370,7 +402,7 @@ Med_Retention_time <-
                 dplyr::summarise(measured_RT_range_min = paste0(round(min(Retention.time),1), "-", round(max(Retention.time),1))),
               by = "Experiment")
   
-  cat(paste0("mRT calculated within the range of ",min_Retention,"-",max_Retention," min"))
+  cat(paste0("mRT calculated within the range of ",min_Retention,"-",max_Retention," min.\n"))
   
   if(!plot){return(df)} else{
     require(stringr)
@@ -529,7 +561,7 @@ plot_circular_histogram <- function(phases, color = "none", color_12 = "#B788BD"
   # create a df with the amount of entries with phases adjacent to each full hour of the day
   DF <- data.frame(
     variable=c(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23),
-    value=c(sum(phases>23.5 & phases<0.5), sum(phases>0.5 & phases<1.5), sum(phases>1.5 & phases<2.5),sum(phases>2.5 & phases<3.5),
+    value=c(sum(phases>23.5 | phases<0.5), sum(phases>0.5 & phases<1.5), sum(phases>1.5 & phases<2.5),sum(phases>2.5 & phases<3.5),
             sum(phases>3.5 & phases<4.5),sum(phases>4.5 & phases<5.5),sum(phases>5.5 & phases<6.5),sum(phases>6.5 & phases<7.5),
             sum(phases>7.5 & phases<8.5),sum(phases>8.5 & phases<9.5),sum(phases>9.5 & phases<10.5),sum(phases>10.5 & phases<11.5),
             sum(phases>11.5 & phases<12.5),sum(phases>12.5 & phases<13.5),sum(phases>13.5 & phases<14.5),sum(phases>14.5 & phases<15.5),
@@ -537,8 +569,8 @@ plot_circular_histogram <- function(phases, color = "none", color_12 = "#B788BD"
             sum(phases>19.5 & phases<20.5),sum(phases>20.5 & phases<21.5),sum(phases>21.5&phases<22.5),sum(phases>22.5&phases<23.5)))
 
   DF <- DF %>% mutate(day_color = case_when(color != "none" ~ color,
-                                            color == "none" & variable<18 & variable >6  ~ color_12,
-                                            color == "none" & (variable>18 | variable <6) ~ color_0)) # Phase 6 & 18 get grey now, what should they have?
+                                            color == "none" & variable<18 & variable >=6  ~ color_12,
+                                            color == "none" & (variable>=18 | variable <6) ~ color_0)) # Phase 6 & 18 get grey now, what should they have?
 
   # make a bar plot to be able to extract the y-axis limit (important for making the rose plot more pretty)
   bar <- ggplot(DF, aes(x=as.factor(variable), y=value))  +
@@ -563,8 +595,10 @@ plot_circular_histogram <- function(phases, color = "none", color_12 = "#B788BD"
     coord_polar(start = - pi / 24) +
     labs(x = "", y = "")
 
-  ggdraw(p) +
+  p <- ggdraw(p) +
     draw_label(paste0("n = ", as.character(length(phases))), x = 0.95, y = 0.1, hjust = 1, vjust = 0, size = 10)
+  
+  return(p)
 
 }
 
@@ -608,7 +642,6 @@ plot_Overlapping_proteins <- function(proteinGroups = read_Perseus_file()){
 
 
 
-
 # =============================================================================
 # Data preprocessing and transformation
 # =============================================================================
@@ -622,8 +655,8 @@ plot_Overlapping_proteins <- function(proteinGroups = read_Perseus_file()){
 #' @param path Path to the file
 #' @param changeWD Set working directory to the file location
 #' @return A data.frame
-read_Perseus_file <- function(path = NULL, changeWD = TRUE) {
-  cat("The read_Perseus_file function was updated on 12.6.24 to run faster and support .parquet files which are much faster to load than the report.tsv from DIA-NN. Tell Fabian if you encounter errors.")
+read_Perseus_file <- function(path = NULL, changeWD = F) {
+  cat("The read_Perseus_file function was updated on 12.6.24 to run faster and support .parquet files which are much faster to load than the report.tsv from DIA-NN. Tell Fabian if you encounter errors.\n")
   require(tidyverse)
   require(stringr)
   require(arrow)
@@ -637,6 +670,7 @@ read_Perseus_file <- function(path = NULL, changeWD = TRUE) {
   }
   
   print(path)
+  suppressMessages(suppressWarnings(tryCatch(random_fun(), error = function(e) NULL)))
   
   if(grepl("\\.parquet$", path)){
     df <- read_parquet(file = path, 
@@ -846,6 +880,8 @@ category_counting <- function(df, categorical_columns, distinction_col = NA, gro
   return(count)
 }
 
+
+
 Perseus_left_join_indexing <- function(df1,df2,
                                        join_style = "inner",
                                        unnest_column1 = "Protein.Group",
@@ -895,8 +931,11 @@ Perseus_left_join_indexing <- function(df1,df2,
 
 Perseus_matching <- function(df1,df2,
                              join_style = "left",
-                             join_columns = c("Genes","Sequence.window")){
-  # writing a function to imitate the Perseus matching, by splitting matching columns at ";" separators
+                             join_column = "Genes" # has to be identical in both df
+                             ){
+  # not working properly!!! (looses rows)
+  
+  # writing a function to imitate the Perseus matching, by splitting matching columns at ";" seperators
   # be aware that this is not a perfect solution for matching Phospho datasets, neither is Perseus
   
   require(tidyverse)
@@ -918,13 +957,13 @@ Perseus_matching <- function(df1,df2,
   
   
   # Split and unnest both dataframes
-  df1_unnested <- split_and_unnest(df1, join_columns)
-  df2_unnested <- split_and_unnest(df2, join_columns)
+  df1_unnested <- split_and_unnest(df1, join_column)
+  df2_unnested <- split_and_unnest(df2, join_column)
   
   if(join_style == "left"){
     # Perform a left join style indexing
     result <- df1_unnested %>% left_join(df2_unnested,
-                                         by = join_columns)
+                                         by = join_column)
   }else{
     cat("unsupported joining style")
     return()
@@ -933,9 +972,7 @@ Perseus_matching <- function(df1,df2,
   # Aggregate the results back to the original format
   aggregated_result <- result %>%
     group_by(ID_1) %>% 
-    mutate(across(all_of(join_columns), ~ paste(unique(.), collapse = ";"))) %>% 
-    ungroup %>% 
-    distinct(ID_1, .keep_all = TRUE) %>% 
+    summarize(across(everything(), ~ paste(unique(.), collapse = ";")), .groups = "drop") %>%
     select(-ID_1, -ID_2)
   
   return(aggregated_result)
@@ -1105,6 +1142,7 @@ filter_vv <- function(df, conditions, type = "any", min_valid = 1) {
   return(df_filtered)
 }
 
+                             
 # =============================================================================
 # Imputation
 # =============================================================================
@@ -1204,7 +1242,7 @@ row_average_imputation <- function(data_matrix, groups_matrix, group){
   imputed_matrix <- imputed_matrix %>% mutate_all(~ifelse(is.nan(.), NA, .))
   return(imputed_matrix)
 }
-
+                     
 # =============================================================================
 # Statistical testing
 # =============================================================================
@@ -1376,6 +1414,7 @@ plot_t_test_results <- function(results, condition_1, condition_2,
 
 plot_heatmap <- function(dataframe, samples, row_annotation_cols = NA, show_colnames = FALSE, show_rownames = TRUE, 
                          row_column = "Genes", impute = TRUE) {
+  
   # Capture the original variable names of the lists
   sample_names <- sapply(substitute(samples)[-1], deparse)
   
@@ -1427,7 +1466,7 @@ plot_heatmap <- function(dataframe, samples, row_annotation_cols = NA, show_coln
     message("An error occured: ", e$message, "\n\nNo clustering will be performed. You may want to set impute = TRUE")
     FALSE
   })
-  
+
   
   # Restore imputed values back to NA after clustering (if imputation was enabled)
   if (impute) {
@@ -1466,21 +1505,21 @@ plot_heatmap <- function(dataframe, samples, row_annotation_cols = NA, show_coln
   
   # Generate the heatmap
   p <- pheatmap(scaled_matrix,
-                scale = "none", 
-                cluster_rows = clustering, 
-                cluster_cols = FALSE,
-                clustering_method = "complete",
-                color = colorRampPalette(c("navy", "white", "firebrick"))(50),
-                annotation_col = annotation_col,
-                annotation_colors = annotation_colors, 
-                annotation_row = annotation_row, 
-                na_col = "grey",
-                show_colnames = show_colnames,
-                show_rownames = show_rownames)
+           scale = "none", 
+           cluster_rows = clustering, 
+           cluster_cols = FALSE,
+           clustering_method = "complete",
+           color = colorRampPalette(c("navy", "white", "firebrick"))(50),
+           annotation_col = annotation_col,
+           annotation_colors = annotation_colors, 
+           annotation_row = annotation_row, 
+           na_col = "grey",
+           show_colnames = show_colnames,
+           show_rownames = show_rownames)
   
   return(p)
 }
-
+                                          
 # =============================================================================
 # Quantification helpers
 # =============================================================================
@@ -1570,7 +1609,6 @@ phos_ratio <- function(modificationSpecificPeptides = read_Perseus_file()){
 
 
 
-
 # =============================================================================
 # Miscellaneous
 # =============================================================================
@@ -1634,16 +1672,16 @@ get.ppiNCBI <- function(g.n) {
 
 plot_volcano <- function(df_volcano = read_Perseus_file(),
                          p_value_treshold = 1,
-                         pos_difference_treshold = 1.5,
-                         neg_difference_treshold = -1.5,
-                         plot_title = "Give your plot a name please",
-                         condition_name = "condition",
-                         control_name = "control",
-                         color_control = "#14B1BB",
-                         color_condition = "#EE611B",
+                         pos_difference_treshold = 2,
+                         neg_difference_treshold = -2,
+                         plot_title = "ZT4",
+                         condition_name = "SD",
+                         control_name = "BL",
+                         color_control = "#0000FF",
+                         color_condition = "#FF0000",
                          label_genes = T,
-                         gene_list = c("PDCD6"),
-                         gene_list_color = "#dde329",
+                         gene_list = c(""),
+                         gene_list_color = "#808080",
                          save_image = T,
                          image_name = "volcano_X",
                          treshold_lines = T,
@@ -1653,9 +1691,8 @@ plot_volcano <- function(df_volcano = read_Perseus_file(),
                          general_point_size = 1,
                          highlighted_point_size = 1,
                          line_width = .2,
-                         x_breaks = 2,
-                         custom_x_limits = F,
-                         x_limits = c(-10,10),
+                         x_breaks = NA, # example: 5 (you need x_limits as well)
+                         x_limits = NA, # example: c(-10,10)
                          point_transparency_significants = 0.7,
                          point_transparency_labeled_genes = 0.7){                    
   
@@ -1723,17 +1760,17 @@ plot_volcano <- function(df_volcano = read_Perseus_file(),
           axis.title=element_text(size=text_size),
           axis.line = element_line(colour = 'black', linewidth = line_width),
           axis.ticks = element_line(colour = "black", linewidth = line_width))+
-    {if (custom_x_limits)
+    {if (!is.na(limits) & !is.na(breaks))
       scale_x_continuous(breaks = seq(min(x_limits),max(x_limits),x_breaks),
-                         limits = x_limits) else {scale_x_continuous(breaks = seq(floor(min(df_volcano$Difference)), ceiling(max(df_volcano$Difference)), x_breaks))}} 
+                         limits = x_limits) else {scale_x_continuous(breaks = seq(floor(min(df_volcano$Difference,na.rm=T)), ceiling(max(df_volcano$Difference,na.rm=T)), x_breaks))}} 
 
   if(save_image){
     save_wd <- choose.dir(default = "",
                           caption = "Choose in what folder you want to save the image")
     ggsave(filename = paste0(image_name, ".pdf"),
            path = save_wd,
-           height = 5,
-           width = 5,
+           height = 3,
+           width = 3,
            dpi = 1000,
            units = "in")
   }
@@ -1851,13 +1888,13 @@ PTM_localization_V2 <- function(df_ptm = read_Perseus_file(),
   # please manually load and supply files like this:
   
   # library(phylotools)
-  # fasta = read.fasta("path.fasta", clean_name = F)
-  # fasta_add = read.fasta("path.fasta", clean_name = F)
+  # fasta = read.fasta("C:\\Users\\di67hav\\Desktop\\Fasta\\updated_FASTA_May_2023\\UP000000589_10090_mouse.fasta", clean_name = F)
+  # fasta_add = read.fasta("C:\\Users\\di67hav\\Desktop\\Fasta\\updated_FASTA_May_2023\\UP000000589_10090_additional_mouse.fasta", clean_name = F)
   # 
-  # df_ptm <- read_Perseus_file("path.pr_matrix.tsv")
+  # df_ptm <- read_Perseus_file("D:\\FabianMS\\homeostat\\Japan\\FKJ phospho\\fresh quant\\report_full.pr_matrix.tsv")
   # df_ptm_annot <- PTM_localization_V2(df_ptm, fasta, fasta_add)
   # 
-  # write.table(df_ptm_annot, file = "path.tsv", row.names = F, col.names = T, sep = "\t", quote = FALSE, na = "")
+  # write.table(df_ptm_annot, file = "D:\\FabianMS\\homeostat\\Japan\\FKJ phospho\\fresh quant\\report_full.pr_matrix_annot2.tsv", row.names = F, col.names = T, sep = "\t", quote = FALSE, na = "")
   
   
   
@@ -1998,7 +2035,7 @@ SequenceWindow_size_reduction <- function(df_ptm = read_Perseus_file()){
   # safe the output like this and select the input file in the pop up window:
   # write.table(SequenceWindow_size_reduction(), file = "Your path.tsv", row.names = F, col.names = T, sep = "\t", quote = FALSE, na = "")
   
-  # or write a full analysis sequence (change the "Your path" before running):
+  # or write a full analysis sequence (change the "Your path" before running) DIA-NN:
   # write.table(
   #   SequenceWindow_size_reduction(
   #     PTM_localization_V2(read_Perseus_file("Your path\\report.pr_matrix.tsv"),
@@ -2006,6 +2043,20 @@ SequenceWindow_size_reduction <- function(df_ptm = read_Perseus_file()){
   #                         fasta_add = read.fasta("Your path.fasta", clean_name = F))), 
   #   file = "Your output path.tsv", row.names = F, col.names = T, sep = "\t", quote = FALSE, na = "")
   
+  # MaxQuant:
+  # write.table(
+  #   SequenceWindow_size_reduction(
+  #     read_Perseus_file("Your path") %>% 
+  #       rename(SequenceWindow_UniMod_21 = Sequence.window,
+  #              Position_UniMod_21 = Position) %>% 
+  #       tibble::rowid_to_column("ID")) %>% 
+  #     rename(Sequence.window = SequenceWindow_UniMod_21,
+  #            Position = Position_UniMod_21) %>% 
+  #     select(-ID), 
+  #   file = "Your output path.txt", 
+  #   row.names = F, col.names = T, sep = "\t", quote = FALSE, na = "")
+  
+
   require(tidyverse)
   
   df_ptm2 <- df_ptm %>%
@@ -2066,6 +2117,50 @@ calculate_coverage <- function(protein_sequence, short_sequences) {
     }
   }
   
+  # Identify continuous ranges in coverage_vector
+  find_ranges <- function(vec) {
+    one_indices <- which(vec == 1)
+    ranges <- list()
+    start <- NA
+    
+    for (i in seq_along(one_indices)) {
+      if (is.na(start)) {
+        start <- one_indices[i]
+      }
+      if (i == length(one_indices) || one_indices[i + 1] != one_indices[i] + 1) {
+        ranges <- append(ranges, list(c(start, one_indices[i])))
+        start <- NA
+      }
+    }
+    return(do.call(rbind, ranges))
+  }
+  
+  short_seq_df <- as.data.frame(find_ranges(coverage_vector))
+  colnames(short_seq_df) <- c("start", "end")
+  
+  # Dataframe for full protein sequence
+  protein_length <- nchar(protein_sequence)
+  protein_df <- data.frame(start = 1, end = protein_length)
+  
+  # Generate plot
+  coverage_plot <- ggplot() +
+    # Grey protein sequence bar
+    geom_rect(data = protein_df, aes(xmin = start, xmax = end, ymin = 1, ymax = 1.5), fill = "grey70", color = "black") +
+    
+    # Blue bars for continuous covered regions
+    geom_rect(data = short_seq_df, aes(xmin = start, xmax = end, ymin = 0.5, ymax = 1), fill = "blue", alpha = 0.7) +
+    
+    # X-axis labels with forced inclusion of protein_length
+    scale_x_continuous(breaks = unique(c(seq(1, protein_length, by = ceiling((protein_length - 1) / 5)), protein_length))) +
+    labs(x = "Protein Sequence Position", y = "", title = "Protein Coverage Visualization") +
+    
+    # Remove unnecessary y-axis elements
+    theme_classic() +
+    theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(), axis.line = element_blank())
+  
+  
+  print(coverage_plot)  # Display the plot
+  
   # Define ANSI escape codes for console text color
   black <- "\033[30m"
   grey <- "\033[37m"
@@ -2122,7 +2217,7 @@ calculate_coverage <- function(protein_sequence, short_sequences) {
   cat("Coverage Percentage:", coverage_percentage, "%\n")
   
   # Return coverage vector, ranges, and percentage
-  return(list(coverage_vector = coverage_vector, coverage_ranges = coverage_ranges, coverage_percentage = coverage_percentage))
+  return(list(coverage_vector = coverage_vector, coverage_ranges = coverage_ranges, coverage_percentage = coverage_percentage, coverage_plot = coverage_plot))
 }
 
 
