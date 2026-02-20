@@ -1302,23 +1302,30 @@ t_test <- function(report, condition_1, condition_2, min_valid = 3, apply_imputa
 }
 
 check_exclusive_presence <- function(report, condition_1, condition_2, min_valid = 3) {
+  start <- Sys.time()
   # Capture the names of condition_1 and condition_2 as strings
   condition_1_name <- deparse(substitute(condition_1))
   condition_2_name <- deparse(substitute(condition_2))
   
-  # Check for exclusive presence and create dynamically named columns
+  # Get the columns for the conditions
+  cond_1_vals <- select(report, all_of(condition_1))
+  cond_2_vals <- select(report, all_of(condition_2))
+  
+  # Calculate the number of non-NA values in each condition column
+  cond_1_na_count <- rowSums(!is.na(cond_1_vals))
+  cond_2_na_count <- rowSums(!is.na(cond_2_vals))
+  
+  # Create new columns for exclusive presence
   results <- report %>%
-    rowwise() %>%
     mutate(
-      # Check for exclusive presence in condition_1 (all values are NA in condition_2, but not in condition_1)
       !!paste0("exclusively_present_in_", condition_1_name, "_vs_", condition_2_name) := 
-        (sum(!is.na(c_across(all_of(condition_2)))) == 0 & sum(!is.na(c_across(all_of(condition_1)))) >= min_valid),
+        (cond_2_na_count == 0 & cond_1_na_count >= min_valid),
       
-      # Check for exclusive presence in condition_2 (all values are NA in condition_1, but not in condition_2)
       !!paste0("exclusively_present_in_", condition_2_name, "_vs_", condition_1_name) := 
-        (sum(!is.na(c_across(all_of(condition_1)))) == 0 & sum(!is.na(c_across(all_of(condition_2)))) >= min_valid)
-    ) %>%
-    ungroup()
+        (cond_1_na_count == 0 & cond_2_na_count >= min_valid)
+    )
+  
+  cat("Time taken for check exclusive function: ", round(difftime(Sys.time(), start, units = "secs"), 3), " seconds\n")
   
   return(results)
 }
