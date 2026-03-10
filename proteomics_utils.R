@@ -130,7 +130,7 @@ plot_quants <- function(quants,
 #'   \code{id} or \code{UID}, respectively).
 #'
 #' @return A \code{ggplot} object.
-cyclinc_plotting <- function(df, IdOfInterest=NULL, annotation, scaleTo24h = F, zScore = T, fit = "", facet = "", datatype = "prot", facet_rows = 1){
+cyclic_plotting <- function(df, IdOfInterest=NULL, annotation, scaleTo24h = F, zScore = T, fit = "", facet = "", datatype = "prot", facet_rows = 1){
   require(tidyverse)
   require(svDialogs)
   require(janitor)
@@ -214,8 +214,24 @@ cyclinc_plotting <- function(df, IdOfInterest=NULL, annotation, scaleTo24h = F, 
       POI_long$value <- ave(POI_long$value, POI_long$id, FUN=scale)
     }
   }
+
+  # ----- PHASE VALUE EXTRACTION -----
+  phase_available <- all(paste0("phase_", unique(annotation$group)) %in% colnames(df))
   
-  # plot all LFQ intensities
+  if(!phase_available){
+    warning("Phase columns not found in df. Profiles will be drawn without phase values.")
+    POI_long$phase <- NA
+  } else {
+    # extract the correct phase column per group
+    POI_long$phase <- mapply(function(id, group){
+      col_name <- paste0("phase_", group)
+      phase_val <- df[df$id == id, col_name]
+      if(length(phase_val) == 0) return(NA)
+      return(phase_val)
+    }, POI_long$id, POI_long$group)
+  }
+  
+  # ----- PLOTTING -----
   if("group" %in% colnames(annotation)){
     p <- ggplot(POI_long, aes(x=time, y=value, color = group)) +
       geom_point() +
@@ -225,8 +241,10 @@ cyclinc_plotting <- function(df, IdOfInterest=NULL, annotation, scaleTo24h = F, 
       {if(fit == "harmonic")geom_smooth(method = "lm", formula = y ~ cos(2*pi/24*x)+sin(2*pi/24*x), se=F)}+
       {if(fit == "loess")geom_smooth(se=F, span = .6)}+
       {if(fit == "gam")geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"), se = F)}+
-      stat_summary(fun.data = mean_se,
-                   geom = "errorbar"); p
+      stat_summary(fun.data = mean_se, geom = "errorbar")+
+    geom_text(aes(label = ifelse(!is.na(phase), paste0("\u03A6 = ", round(phase,1)), "")),
+                x = Inf, y = -Inf,
+                hjust = 1.1, vjust = -0.5, size = 3, color = "black"); p
   }else{
     p <- ggplot(POI_long, aes(x=time, y=value)) +
       geom_point() +
@@ -235,8 +253,10 @@ cyclinc_plotting <- function(df, IdOfInterest=NULL, annotation, scaleTo24h = F, 
       {if(fit == "harmonic")geom_smooth(method = "lm", formula = y ~ cos(2*pi/24*x)+sin(2*pi/24*x), se=F)}+
       {if(fit == "loess")geom_smooth(se=F, span = .6)}+
       {if(fit == "gam")geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"), se = F)}+
-      stat_summary(fun.data = mean_se,
-                   geom = "errorbar"); p
+      stat_summary(fun.data = mean_se, geom = "errorbar")+
+    geom_text(aes(label = ifelse(!is.na(phase), paste0("\u03A6 = ", round(phase,1)), "")),
+                x = Inf, y = -Inf,
+                hjust = 1.1, vjust = -0.5, size = 3, color = "black"); p
   }
   
   
