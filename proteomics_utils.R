@@ -1186,6 +1186,8 @@ set_floor_min_if_all_group_nan <- function(report, metadata, group_col) {
 }
 
 impute_perseus_normal <- function(df, width = 0.3, downshift = 1.8) {
+  # to generate the same numbers each time the same analysis script is run we utilise a seed for the normal distribution
+  set.seed(123)
   # Iterate over each column in the dataframe
   for (col in colnames(df)) {
     # Identify missing values (e.g., NaN or NA)
